@@ -162,11 +162,7 @@ func (ex *Executable) load(f *internal.SafeELFFile) error {
 // address calculates the address of a symbol in the executable.
 //
 // opts must not be nil.
-func (ex *Executable) address(symbol string, opts *UprobeOptions) (uint64, error) {
-	if opts.Address > 0 {
-		return opts.Address + opts.Offset, nil
-	}
-
+func (ex *Executable) address(symbol string) (uint64, error) {
 	var err error
 	ex.addressesOnce.Do(func() {
 		var f *internal.SafeELFFile
@@ -198,8 +194,7 @@ func (ex *Executable) address(symbol string, opts *UprobeOptions) (uint64, error
 		return 0, fmt.Errorf("cannot resolve %s library call '%s': %w "+
 			"(consider providing UprobeOptions.Address)", ex.path, symbol, ErrNotSupported)
 	}
-
-	return address + opts.Offset, nil
+	return address, nil
 }
 
 // Uprobe attaches the given eBPF program to a perf event that fires when the
@@ -271,6 +266,21 @@ func (ex *Executable) Uretprobe(symbol string, prog *ebpf.Program, opts *UprobeO
 	return lnk, nil
 }
 
+// uprobeAddress calculates the address of a symbol in the executable
+// tuned with uprobe opts
+//
+// opts must not be nil.
+func (ex *Executable) uprobeAddress(symbol string, opts *UprobeOptions) (uint64, error) {
+	if opts.Address > 0 {
+		return opts.Address + opts.Offset, nil
+	}
+	address, err := ex.address(symbol)
+	if err != nil {
+		return 0, err
+	}
+	return address + opts.Offset, nil
+}
+
 // uprobe opens a perf event for the given binary/symbol and attaches prog to it.
 // If ret is true, create a uretprobe.
 func (ex *Executable) uprobe(symbol string, prog *ebpf.Program, opts *UprobeOptions, ret bool) (*perfEvent, error) {
@@ -284,7 +294,7 @@ func (ex *Executable) uprobe(symbol string, prog *ebpf.Program, opts *UprobeOpti
 		opts = &UprobeOptions{}
 	}
 
-	offset, err := ex.address(symbol, opts)
+	offset, err := ex.uprobeAddress(symbol, opts)
 	if err != nil {
 		return nil, err
 	}
