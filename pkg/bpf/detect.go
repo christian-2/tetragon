@@ -7,6 +7,7 @@
 package bpf
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -26,6 +27,7 @@ var (
 	overrideHelper   Feature
 	signalHelper     Feature
 	kprobeMulti      Feature
+	uprobeMulti      Feature
 	buildid          Feature
 	modifyReturn     Feature
 	largeProgramSize Feature
@@ -109,6 +111,46 @@ func HasKprobeMulti() bool {
 		kprobeMulti.detected = detectKprobeMulti()
 	})
 	return kprobeMulti.detected
+}
+
+func detectUprobeMulti() bool {
+	prog, err := ebpf.NewProgram(&ebpf.ProgramSpec{
+		Name: "probe_upm_link",
+		Type: ebpf.Kprobe,
+		Instructions: asm.Instructions{
+			asm.Mov.Imm(asm.R0, 0),
+			asm.Return(),
+		},
+		AttachType: ebpf.AttachTraceUprobeMulti,
+		License:    "MIT",
+	})
+	if errors.Is(err, unix.E2BIG) {
+		// Kernel doesn't support AttachType field.
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	defer prog.Close()
+
+	ex, err := link.OpenExecutable("/proc/self/exe")
+	if err != nil {
+		return false
+	}
+
+	um, err := ex.UprobeMulti([]string{}, prog, &link.UprobeMultiOptions{Addresses: []uint64{0}})
+	if err != nil {
+		return false
+	}
+	um.Close()
+	return true
+}
+
+func HasUprobeMulti() bool {
+	uprobeMulti.init.Do(func() {
+		uprobeMulti.detected = detectUprobeMulti()
+	})
+	return uprobeMulti.detected
 }
 
 func detectBuildId() bool {
@@ -199,6 +241,7 @@ func HasProgramLargeSize() bool {
 }
 
 func LogFeatures() string {
-	return fmt.Sprintf("override_return: %t, buildid: %t, kprobe_multi: %t, fmodret: %t, signal: %t, large: %t",
-		HasOverrideHelper(), HasBuildId(), HasKprobeMulti(), HasModifyReturn(), HasSignalHelper(), HasProgramLargeSize())
+	return fmt.Sprintf("override_return: %t, buildid: %t, kprobe_multi: %t, uprobe_multi: %t, fmodret: %t, signal: %t, large: %t",
+		HasOverrideHelper(), HasBuildId(), HasKprobeMulti(), HasUprobeMulti(),
+		HasModifyReturn(), HasSignalHelper(), HasProgramLargeSize())
 }
