@@ -5,4 +5,5 @@ metadata:
 spec:
   uprobes:
   - path: "/bin/bash"
-    symbol: "readline"
+    symbols:
+    - "readline"
