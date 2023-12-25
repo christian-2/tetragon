@@ -156,6 +156,11 @@ func isValidUprobeSelectors(selectors []v1alpha1.KProbeSelector) error {
 	return nil
 }
 
+type addUprobeIn struct {
+	sensorPath string
+	policyName string
+}
+
 func createGenericUprobeSensor(
 	name string,
 	uprobes []v1alpha1.UProbeSpec,
@@ -163,8 +168,90 @@ func createGenericUprobeSensor(
 ) (*sensors.Sensor, error) {
 	var progs []*program.Program
 	var maps []*program.Map
+	var ids []idtable.EntryID
+	var err error
 
 	sensorPath := name
+
+	in := addUprobeIn{
+		sensorPath: name,
+		policyName: policyName,
+	}
+
+	for _, spec := range uprobes {
+		ids, err = addUprobe(&spec, policyName, ids, &in)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	progs, maps, err = createSingleUprobeSensor(sensorPath, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	return &sensors.Sensor{
+		Name:  name,
+		Progs: progs,
+		Maps:  maps,
+	}, nil
+}
+
+func addUprobe(spec *v1alpha1.UProbeSpec, policyName string, ids []idtable.EntryID, in *addUprobeIn) ([]idtable.EntryID, error) {
+	var args []v1alpha1.KProbeArg
+
+	if err := isValidUprobeSelectors(spec.Selectors); err != nil {
+		return nil, err
+	}
+
+	// Parse Filters into kernel filter logic
+	uprobeSelectorState, err := selectors.InitKernelSelectorState(spec.Selectors, args, nil, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	config := &api.EventConfig{}
+	for _, sym := range spec.Symbols {
+		uprobeEntry := &genericUprobe{
+			tableId:    idtable.UninitializedEntryID,
+			config:     config,
+			path:       spec.Path,
+			symbol:     sym,
+			selectors:  uprobeSelectorState,
+			policyName: in.policyName,
+		}
+
+		uprobeTable.AddEntry(uprobeEntry)
+		id := uprobeEntry.tableId
+
+		uprobeEntry.pinPathPrefix = sensors.PathJoin(in.sensorPath, fmt.Sprintf("%d", id.ID))
+		config.FuncId = uint32(id.ID)
+
+		if selectors.HasEarlyBinaryFilter(spec.Selectors) {
+			config.Flags |= flagsEarlyFilter
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func createSingleUprobeSensor(sensorPath string, ids []idtable.EntryID) ([]*program.Program, []*program.Map, error) {
+	var progs []*program.Program
+	var maps []*program.Map
+
+	for _, id := range ids {
+		uprobeEntry, err := genericUprobeTableGet(id)
+		if err != nil {
+			return nil, nil, err
+		}
+		progs, maps = createUprobeSensorFromEntry(uprobeEntry, sensorPath, progs, maps)
+	}
+
+	return progs, maps, nil
+}
+
+func createUprobeSensorFromEntry(uprobeEntry *genericUprobe, sensorPath string,
+	progs []*program.Program, maps []*program.Map) ([]*program.Program, []*program.Map) {
 
 	loadProgName := "bpf_generic_uprobe.o"
 	if kernels.EnableV61Progs() {
@@ -173,73 +260,31 @@ func createGenericUprobeSensor(
 		loadProgName = "bpf_generic_uprobe_v53.o"
 	}
 
-	for _, spec := range uprobes {
-		config := &api.EventConfig{}
+	pinPath := uprobeEntry.pinPathPrefix
+	pinProg := sensors.PathJoin(pinPath, "prog")
 
-		var args []v1alpha1.KProbeArg
-
-		if err := isValidUprobeSelectors(spec.Selectors); err != nil {
-			return nil, err
-		}
-
-		// Parse Filters into kernel filter logic
-		uprobeSelectorState, err := selectors.InitKernelSelectorState(spec.Selectors, args, nil, nil, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, sym := range spec.Symbols {
-			uprobeEntry := &genericUprobe{
-				tableId:    idtable.UninitializedEntryID,
-				config:     config,
-				path:       spec.Path,
-				symbol:     sym,
-				selectors:  uprobeSelectorState,
-				policyName: policyName,
-			}
-
-			uprobeTable.AddEntry(uprobeEntry)
-			id := uprobeEntry.tableId.ID
-
-			uprobeEntry.pinPathPrefix = sensors.PathJoin(sensorPath, fmt.Sprintf("%d", id))
-			config.FuncId = uint32(id)
-
-			if selectors.HasEarlyBinaryFilter(spec.Selectors) {
-				config.Flags |= flagsEarlyFilter
-			}
-
-			pinPath := uprobeEntry.pinPathPrefix
-			pinProg := sensors.PathJoin(pinPath, "prog")
-
-			attachData := &program.UprobeAttachData{
-				Path:   spec.Path,
-				Symbol: sym,
-			}
-
-			load := program.Builder(
-				path.Join(option.Config.HubbleLib, loadProgName),
-				"",
-				"uprobe/generic_uprobe",
-				pinProg,
-				"generic_uprobe").
-				SetAttachData(attachData).
-				SetLoaderData(uprobeEntry)
-
-			progs = append(progs, load)
-
-			configMap := program.MapBuilderPin("config_map", sensors.PathJoin(pinPath, "config_map"), load)
-			tailCalls := program.MapBuilderPin("uprobe_calls", sensors.PathJoin(pinPath, "up_calls"), load)
-			filterMap := program.MapBuilderPin("filter_map", sensors.PathJoin(pinPath, "filter_map"), load)
-			selMatchBinariesMap := program.MapBuilderPin("tg_mb_sel_opts", sensors.PathJoin(pinPath, "tg_mb_sel_opts"), load)
-			maps = append(maps, configMap, tailCalls, filterMap, selMatchBinariesMap)
-		}
+	attachData := &program.UprobeAttachData{
+		Path:   uprobeEntry.path,
+		Symbol: uprobeEntry.symbol,
 	}
 
-	return &sensors.Sensor{
-		Name:  name,
-		Progs: progs,
-		Maps:  maps,
-	}, nil
+	load := program.Builder(
+		path.Join(option.Config.HubbleLib, loadProgName),
+		"",
+		"uprobe/generic_uprobe",
+		pinProg,
+		"generic_uprobe").
+		SetAttachData(attachData).
+		SetLoaderData(uprobeEntry)
+
+	progs = append(progs, load)
+
+	configMap := program.MapBuilderPin("config_map", sensors.PathJoin(pinPath, "config_map"), load)
+	tailCalls := program.MapBuilderPin("uprobe_calls", sensors.PathJoin(pinPath, "up_calls"), load)
+	filterMap := program.MapBuilderPin("filter_map", sensors.PathJoin(pinPath, "filter_map"), load)
+	selMatchBinariesMap := program.MapBuilderPin("tg_mb_sel_opts", sensors.PathJoin(pinPath, "tg_mb_sel_opts"), load)
+	maps = append(maps, configMap, tailCalls, filterMap, selMatchBinariesMap)
+	return progs, maps
 }
 
 func (k *observerUprobeSensor) PolicyHandler(
