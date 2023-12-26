@@ -3,6 +3,9 @@ kind: TracingPolicy
 metadata:
   name: "uprobe"
 spec:
+  options:
+  - name: "disable-uprobe-multi"
+    value: "0"
   uprobes:
   - path: "/bin/bash"
     symbols:
