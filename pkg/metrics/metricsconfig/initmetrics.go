@@ -13,6 +13,7 @@ import (
 	"github.com/cilium/tetragon/pkg/metrics/mapmetrics"
 	"github.com/cilium/tetragon/pkg/metrics/opcodemetrics"
 	"github.com/cilium/tetragon/pkg/metrics/policyfiltermetrics"
+	"github.com/cilium/tetragon/pkg/metrics/probemetrics"
 	"github.com/cilium/tetragon/pkg/metrics/processexecmetrics"
 	"github.com/cilium/tetragon/pkg/metrics/ratelimitmetrics"
 	"github.com/cilium/tetragon/pkg/metrics/ringbufmetrics"
@@ -51,6 +52,7 @@ func InitAllMetrics(registry *prometheus.Registry) {
 		process.NewBPFCollector(),
 	))
 	registry.MustRegister(eventmetrics.NewBPFCollector())
+	registry.MustRegister(probemetrics.NewBPFCollector())
 
 	// register common third-party collectors
 	registry.MustRegister(collectors.NewGoCollector())
