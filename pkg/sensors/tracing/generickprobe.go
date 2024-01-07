@@ -14,8 +14,10 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
 	"github.com/cilium/tetragon/pkg/api/dataapi"
 	"github.com/cilium/tetragon/pkg/api/ops"
 	"github.com/cilium/tetragon/pkg/api/processapi"
@@ -31,6 +33,7 @@ import (
 	"github.com/cilium/tetragon/pkg/kernels"
 	"github.com/cilium/tetragon/pkg/logger"
 	"github.com/cilium/tetragon/pkg/metrics/kprobemetrics"
+	"github.com/cilium/tetragon/pkg/metrics/probemetrics"
 	"github.com/cilium/tetragon/pkg/observer"
 	"github.com/cilium/tetragon/pkg/option"
 	"github.com/cilium/tetragon/pkg/policyfilter"
@@ -39,6 +42,7 @@ import (
 	"github.com/cilium/tetragon/pkg/sensors"
 	"github.com/cilium/tetragon/pkg/sensors/program"
 	"github.com/cilium/tetragon/pkg/strutils"
+	"github.com/cilium/tetragon/pkg/timer"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/sirupsen/logrus"
 
@@ -537,6 +541,34 @@ func getKprobeSymbols(symbol string, syscall bool, lists []v1alpha1.ListSpec) ([
 	return []string{symbol}, syscall, nil
 }
 
+func getKprobeStats(policyID policyfilter.PolicyID, policyName string, progs []*program.Program) {
+	for _, prog := range progs {
+		info, err := prog.Link.Info()
+		if err != nil {
+			continue
+		}
+
+		missed := uint64(0)
+
+		switch info.Type {
+		case link.PerfEventType:
+			pevent := info.PerfEvent()
+			switch pevent.Type {
+			case link.KprobePEIType, link.KretprobePEIType:
+				kprobe := pevent.Kprobe()
+				missed = kprobe.Missed
+			default:
+			}
+		case link.KprobeMultiType:
+			kmulti := info.KprobeMulti()
+			missed = kmulti.Missed
+		default:
+		}
+
+		probemetrics.Store(uint32(policyID), policyName, prog.Attach, float64(missed))
+	}
+}
+
 func createGenericKprobeSensor(
 	spec *v1alpha1.TracingPolicySpec,
 	name string,
@@ -607,10 +639,17 @@ func createGenericKprobeSensor(
 		return nil, err
 	}
 
+	statsTimer := timer.NewPeriodicTimer("generickprobe stats timer",
+		func() { getKprobeStats(policyID, policyName, progs) }, true)
+
 	return &sensors.Sensor{
 		Name:  name,
 		Progs: progs,
 		Maps:  maps,
+		PostLoadHook: func() error {
+			statsTimer.Start(2 * time.Second)
+			return nil
+		},
 		PostUnloadHook: func() error {
 			var errs error
 			for _, id := range ids {
@@ -625,6 +664,10 @@ func createGenericKprobeSensor(
 					}
 					gk.stackTraceMapRef = nil
 				}
+			}
+			statsTimer.Stop()
+			for _, prog := range progs {
+				probemetrics.Remove(uint32(policyID), prog.Attach)
 			}
 			return errs
 		},
