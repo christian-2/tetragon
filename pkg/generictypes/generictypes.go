@@ -39,6 +39,11 @@ const (
 
 	GenericSyscall64 = 28
 
+	GenericKernelCap      = 29
+	GenericCapInheritable = 30
+	GenericCapPermitted   = 31
+	GenericCapEffective   = 32
+
 	GenericNopType     = -1
 	GenericInvalidType = -2
 )
@@ -101,6 +106,14 @@ func GenericTypeFromString(arg string) int {
 		return GenericKernelModule
 	case "syscall64":
 		return GenericSyscall64
+	case "kernel_cap_t":
+		return GenericKernelCap
+	case "cap_inheritable":
+		return GenericCapInheritable
+	case "cap_permitted":
+		return GenericCapPermitted
+	case "cap_effective":
+		return GenericCapEffective
 	default:
 		return GenericInvalidType
 	}

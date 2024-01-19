@@ -63,6 +63,11 @@ enum {
 
 	syscall64_type = 28,
 
+	kernel_cap_ty = 29,
+	cap_inh_ty = 30,
+	cap_prm_ty = 31,
+	cap_eff_ty = 32,
+
 	nop_s64_ty = -10,
 	nop_u64_ty = -11,
 	nop_u32_ty = -12,
@@ -1469,6 +1474,10 @@ static inline __attribute__((always_inline)) size_t type_to_min_size(int type,
 	case size_type:
 	case s64_ty:
 	case u64_ty:
+	case kernel_cap_ty:
+	case cap_inh_ty:
+	case cap_prm_ty:
+	case cap_eff_ty:
 		return 8;
 	case char_buf:
 	case char_iovec:
@@ -1693,6 +1702,13 @@ selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx,
 		case skb_type:
 		case sock_type:
 			pass &= filter_inet(filter, args);
+			break;
+		case kernel_cap_ty:
+		case cap_inh_ty:
+		case cap_prm_ty:
+		case cap_eff_ty:
+			pass &= filter_64ty(filter, args, false);
+			break;
 		default:
 			break;
 		}
@@ -2505,6 +2521,13 @@ read_call_arg(void *ctx, struct msg_generic_kprobe *e, int index, int type,
 		size = copy_kernel_module(args, arg);
 		break;
 	}
+	case kernel_cap_ty:
+	case cap_inh_ty:
+	case cap_prm_ty:
+	case cap_eff_ty:
+		probe_read(args, sizeof(__u64), (char *)arg);
+		size = sizeof(__u64);
+		break;
 	default:
 		size = 0;
 		break;
