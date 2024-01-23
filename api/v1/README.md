@@ -409,6 +409,10 @@ https://github.com/opencontainers/runtime-spec/blob/main/config.md#createcontain
 | process_credentials_arg | [ProcessCredentials](#tetragon-ProcessCredentials) |  |  |
 | user_ns_arg | [UserNamespace](#tetragon-UserNamespace) |  |  |
 | module_arg | [KernelModule](#tetragon-KernelModule) |  |  |
+| kernel_cap_t_arg | [string](#string) |  |  |
+| cap_inheritable_arg | [string](#string) |  | Capabilities inherited by a forked process. |
+| cap_permitted_arg | [string](#string) |  | Capabilities that are currently permitted. |
+| cap_effective_arg | [string](#string) |  | Capabilities that are actually used. |
 | label | [string](#string) |  |  |
 
 
